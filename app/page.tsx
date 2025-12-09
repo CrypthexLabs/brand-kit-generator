@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { supabase } from "@/lib/supabaseClient";
 
 type BrandKit = {
   brandName: string;
@@ -9,6 +10,8 @@ type BrandKit = {
   bodyFont: string;
   personality: string;
 };
+
+type AuthMode = "login" | "signup";
 
 export default function Home() {
   const [brandName, setBrandName] = useState("");
@@ -19,6 +22,41 @@ export default function Home() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showUpgradeMessage, setShowUpgradeMessage] = useState(false);
+
+  // Auth state
+  const [user, setUser] = useState<any>(null);
+  const [authOpen, setAuthOpen] = useState(false);
+  const [authMode, setAuthMode] = useState<AuthMode>("signup");
+  const [authEmail, setAuthEmail] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [authLoading, setAuthLoading] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [authMessage, setAuthMessage] = useState<string | null>(null);
+
+  // Load current user + subscribe to changes
+  useEffect(() => {
+    let ignore = false;
+
+    const loadUser = async () => {
+      const { data } = await supabase.auth.getUser();
+      if (!ignore) {
+        setUser(data.user ?? null);
+      }
+    };
+
+    loadUser();
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null);
+    });
+
+    return () => {
+      ignore = true;
+      subscription.unsubscribe();
+    };
+  }, []);
 
   async function handleGenerate(e: React.FormEvent) {
     e.preventDefault();
@@ -49,7 +87,7 @@ export default function Home() {
             message = data.error;
           }
         } catch {
-          // ignore JSON parse error and keep default message
+          // ignore
         }
 
         throw new Error(message);
@@ -75,6 +113,68 @@ export default function Home() {
     }
   }
 
+  async function handleEmailAuth(e: React.FormEvent) {
+    e.preventDefault();
+    setAuthLoading(true);
+    setAuthError(null);
+    setAuthMessage(null);
+
+    try {
+      if (!authEmail || !authPassword) {
+        throw new Error("Please enter email and password");
+      }
+
+      if (authMode === "signup") {
+        const { error } = await supabase.auth.signUp({
+          email: authEmail,
+          password: authPassword,
+        });
+        if (error) throw error;
+        setAuthMessage(
+          "Check your email to confirm your account. After confirming, you can log in."
+        );
+      } else {
+        const { error } = await supabase.auth.signInWithPassword({
+          email: authEmail,
+          password: authPassword,
+        });
+        if (error) throw error;
+        setAuthMessage("Logged in!");
+        setAuthOpen(false);
+      }
+    } catch (err: any) {
+      console.error(err);
+      setAuthError(err.message || "Authentication error");
+    } finally {
+      setAuthLoading(false);
+    }
+  }
+
+  async function handleGoogleLogin() {
+    try {
+      setAuthError(null);
+      setAuthMessage(null);
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: "google",
+        options: {
+          redirectTo: window.location.origin,
+        },
+      });
+      if (error) throw error;
+    } catch (err: any) {
+      console.error(err);
+      setAuthError(
+        err.message ||
+          "Google login error. Make sure Google is enabled in Supabase."
+      );
+    }
+  }
+
+  async function handleLogout() {
+    await supabase.auth.signOut();
+    setBrandKit(null);
+  }
+
   return (
     <main className="min-h-screen bg-slate-950 text-slate-50">
       {/* Top nav */}
@@ -92,9 +192,29 @@ export default function Home() {
             <span className="hidden sm:inline text-slate-400">
               v0.2 • AI-powered
             </span>
-            <button className="rounded-lg border border-slate-700 px-3 py-1 hover:border-slate-500 transition">
-              Log in (coming soon)
-            </button>
+            {user ? (
+              <div className="flex items-center gap-2">
+                <span className="hidden sm:inline text-slate-400 max-w-[140px] truncate">
+                  {user.email}
+                </span>
+                <button
+                  onClick={handleLogout}
+                  className="rounded-lg border border-slate-700 px-3 py-1 hover:border-slate-500 transition"
+                >
+                  Log out
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={() => {
+                  setAuthMode("signup");
+                  setAuthOpen(true);
+                }}
+                className="rounded-lg border border-slate-700 px-3 py-1 hover:border-slate-500 transition"
+              >
+                Log in / Sign up
+              </button>
+            )}
           </div>
         </div>
       </header>
@@ -192,7 +312,7 @@ export default function Home() {
               )}
 
               <p className="text-[11px] text-slate-500">
-                Free plan: 1 instant kit at a time. Premium will unlock saved
+                Free plan: AI preview in your browser. Premium will unlock saved
                 brands, exports and more.
               </p>
             </form>
@@ -293,9 +413,9 @@ export default function Home() {
 
                     {showUpgradeMessage && (
                       <p className="text-[10px] text-indigo-300 bg-indigo-950/40 border border-indigo-700/50 rounded-lg px-2 py-2 mt-1">
-                        This is where your paywall goes: we&apos;ll add
-                        accounts, Stripe payments and real PDF exports so
-                        people can pay to unlock the full brand kit.
+                        This is where your paywall goes: we&apos;ll add Stripe
+                        payments and real PDF exports so people can pay to
+                        unlock the full brand kit.
                       </p>
                     )}
                   </div>
@@ -356,22 +476,135 @@ export default function Home() {
                 </ul>
                 <button
                   type="button"
-                  onClick={() => setShowUpgradeMessage(true)}
+                  onClick={() => setAuthOpen(true)}
                   className="mt-3 w-full rounded-lg bg-indigo-500 px-3 py-1.5 text-xs font-medium text-slate-950 hover:bg-indigo-400 transition"
                 >
-                  Join the waitlist (placeholder)
+                  Join the waitlist (create an account)
                 </button>
               </div>
             </div>
 
             <p className="text-[10px] text-slate-500">
-              Next steps: we&apos;ll plug this into real authentication, Stripe
-              payments and a low-maintenance database so you can actually charge
-              for Premium.
+              Next steps: we&apos;ll plug this into a database so logged-in
+              users can save and revisit their brand kits.
             </p>
           </div>
         </aside>
       </div>
+
+      {/* Auth modal */}
+      {authOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4">
+          <div className="w-full max-w-sm rounded-2xl border border-slate-800 bg-slate-950 p-5 space-y-4">
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-semibold">
+                {authMode === "signup" ? "Create your account" : "Log in"}
+              </h2>
+              <button
+                onClick={() => setAuthOpen(false)}
+                className="text-slate-400 text-xs hover:text-slate-200"
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="flex text-[11px] rounded-lg border border-slate-800 overflow-hidden">
+              <button
+                type="button"
+                onClick={() => {
+                  setAuthMode("signup");
+                  setAuthError(null);
+                  setAuthMessage(null);
+                }}
+                className={`flex-1 py-1.5 ${
+                  authMode === "signup"
+                    ? "bg-slate-800 text-slate-50"
+                    : "bg-slate-950 text-slate-400"
+                }`}
+              >
+                Sign up
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setAuthMode("login");
+                  setAuthError(null);
+                  setAuthMessage(null);
+                }}
+                className={`flex-1 py-1.5 ${
+                  authMode === "login"
+                    ? "bg-slate-800 text-slate-50"
+                    : "bg-slate-950 text-slate-400"
+                }`}
+              >
+                Log in
+              </button>
+            </div>
+
+            <form onSubmit={handleEmailAuth} className="space-y-3">
+              <div className="space-y-1">
+                <label className="text-[11px] font-medium">Email</label>
+                <input
+                  type="email"
+                  value={authEmail}
+                  onChange={(e) => setAuthEmail(e.target.value)}
+                  className="w-full rounded-lg bg-slate-900 border border-slate-700 px-3 py-2 text-xs outline-none focus:ring-2 focus:ring-indigo-500"
+                  placeholder="you@example.com"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-[11px] font-medium">Password</label>
+                <input
+                  type="password"
+                  value={authPassword}
+                  onChange={(e) => setAuthPassword(e.target.value)}
+                  className="w-full rounded-lg bg-slate-900 border border-slate-700 px-3 py-2 text-xs outline-none focus:ring-2 focus:ring-indigo-500"
+                  placeholder="At least 6 characters"
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={authLoading}
+                className="w-full rounded-lg bg-indigo-500 px-4 py-2 text-xs font-medium text-slate-950 hover:bg-indigo-400 disabled:opacity-60 transition"
+              >
+                {authLoading
+                  ? "Please wait…"
+                  : authMode === "signup"
+                  ? "Sign up with email"
+                  : "Log in with email"}
+              </button>
+            </form>
+
+            <div className="flex items-center gap-2 text-[10px] text-slate-500">
+              <div className="h-px flex-1 bg-slate-800" />
+              <span>or continue with</span>
+              <div className="h-px flex-1 bg-slate-800" />
+            </div>
+
+            <button
+              type="button"
+              onClick={handleGoogleLogin}
+              className="w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-2 text-xs font-medium text-slate-100 hover:border-slate-500 transition"
+            >
+              Continue with Google
+            </button>
+
+            {authError && (
+              <p className="text-[11px] text-red-400">{authError}</p>
+            )}
+            {authMessage && (
+              <p className="text-[11px] text-emerald-400">{authMessage}</p>
+            )}
+
+            <p className="text-[10px] text-slate-500">
+              No extra fee for login itself. You&apos;ll only pay for your
+              OpenAI usage and, later, Stripe fees on payments from your users.
+            </p>
+          </div>
+        </div>
+      )}
     </main>
   );
 }
